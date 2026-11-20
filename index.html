@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OS Scheduling Visualizer</title>
+<style>
+:root{--bg:#f6f7fb;--card:#fff;--tx:#1d2433;--mu:#667085;--bd:#d9dde7;--ac:#3b6ef6;--ok:#12a36b;--bad:#d9433b}
+@media (prefers-color-scheme:dark){:root{--bg:#12151c;--card:#1b2029;--tx:#e8ebf2;--mu:#98a2b3;--bd:#2d3443;--ac:#6f93ff;--ok:#38c68f;--bad:#ff6b63;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:960px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:0 0 10px}
+.sub{color:var(--mu);margin:0 0 14px}
+.tabs{display:flex;gap:6px;margin-bottom:14px}
+.tabs button{flex:1}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+label{display:block;font-size:12px;color:var(--mu);margin-bottom:3px}
+input,select{width:100%;padding:7px 9px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);font:inherit}
+button{padding:8px 12px;border:1px solid var(--bd);border-radius:8px;background:var(--card);color:var(--tx);font:inherit;cursor:pointer}
+button.p{background:var(--ac);border-color:var(--ac);color:#fff}
+button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+.err{color:var(--bad);margin-top:8px;min-height:1.2em;font-size:13px}
+.scroll{overflow-x:auto}
+svg text{fill:var(--tx);font-size:11px}
+.stat{display:flex;gap:18px;flex-wrap:wrap;margin-top:8px}
+.stat b{font-size:18px}
+.seq{font-family:ui-monospace,Menlo,monospace;font-size:13px;word-break:break-word}
+.seq span.cur{background:var(--ac);color:#fff;border-radius:4px;padding:0 3px}
+table{border-collapse:collapse;width:100%}
+th,td{border-bottom:1px solid var(--bd);padding:5px 6px;text-align:left;font-size:13px}
+td input{padding:4px 6px}
+.gantt{display:flex;min-height:44px;margin-top:8px}
+.gantt div{display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;border-right:1px solid var(--card);min-width:18px}
+.ticks{display:flex}.ticks div{font-size:11px;color:var(--mu);text-align:right;padding-right:2px}
+.hide{display:none}
+.note{font-size:12px;color:var(--mu);margin-top:6px}
+</style>
+</head>
+<body>
+<main>
+<h1>OS Scheduling Visualizer</h1>
+<p class="sub">Disk and CPU scheduling you can step through, animate and compare. Runs offline in any browser.</p>
+<div class="tabs"><button id="tD" class="on">Disk scheduling</button><button id="tC">CPU scheduling</button></div>
+
+<!-- ============ DISK ============ -->
+<section id="disk">
+<div class="card">
+<h2>Input</h2>
+<div class="grid">
+<div><label>Disk size (cylinders)</label><input id="dSize" type="number" value="200"></div>
+<div><label>Initial head position</label><input id="dHead" type="number" value="50"></div>
+<div><label>Request queue (comma separated)</label><input id="dReq" value="82,170,43,140,24,16,190"></div>
+<div><label>Direction (SCAN, C-SCAN, LOOK)</label><select id="dDir"><option value="up">Towards higher cylinders</option><option value="down">Towards lower cylinders</option></select></div>
+<div><label>Algorithm</label><select id="dAlg"><option>FCFS</option><option>SSTF</option><option>SCAN</option><option>C-SCAN</option><option>LOOK</option></select></div>
+</div>
+<div class="row"><button class="p" id="dRun">Run</button><button id="dSample">Load sample</button></div>
+<div class="err" id="dErr"></div>
+</div>
+<div class="card">
+<h2>Seek graph</h2>
+<div class="row" style="margin:0 0 6px"><button id="dPrev">◀ Previous</button><button id="dNext">Next ▶</button><button id="dPlay">▶ Auto-play</button><button id="dReset">Reset</button>
+<span style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mu)">Speed<input id="dSpd" type="range" min="1" max="10" value="5" style="width:90px"></span></div>
+<div class="scroll"><svg id="dSvg" width="100%" viewBox="0 0 900 360"></svg></div>
+<div class="stat"><div>Total head movement<br><b id="dTot">–</b></div><div>Steps shown<br><b id="dStep">–</b></div><div>Current move<br><b id="dMove">–</b></div></div>
+<p class="seq" id="dSeq"></p>
+<p class="note">C-SCAN counts the return jump from the last cylinder to cylinder 0 as head movement. SCAN and C-SCAN travel to the disk edge; LOOK turns at the last request.</p>
+</div>
+<div class="card">
+<h2>Comparison (same input, all algorithms)</h2>
+<div class="scroll"><svg id="dCmp" width="100%" viewBox="0 0 900 260"></svg></div>
+</div>
+</section>
+
+<!-- ============ CPU ============ -->
+<section id="cpu" class="hide">
+<div class="card">
+<h2>Processes</h2>
+<table><thead><tr><th>PID</th><th>Arrival</th><th>Burst</th><th>Priority (low = high)</th><th></th></tr></thead><tbody id="pBody"></tbody></table>
+<div class="row"><button id="pAdd">+ Add process</button>
+<div style="min-width:170px"><label>Algorithm</label><select id="cAlg"><option value="FCFS">FCFS</option><option value="SJF">SJF (non-preemptive)</option><option value="SRTF">SRTF (preemptive SJF)</option><option value="PRI">Priority (non-preemptive)</option><option value="RR">Round Robin</option></select></div>
+<div id="qWrap" style="width:130px" class="hide"><label>Time quantum</label><input id="cQ" type="number" value="2"></div>
+<button class="p" id="cRun" style="align-self:flex-end">Run</button></div>
+<div class="err" id="cErr"></div>
+</div>
+<div class="card">
+<h2>Gantt chart</h2>
+<div class="row" style="margin:0 0 6px"><button id="cPrev">◀ Previous</button><button id="cNext">Next ▶</button><button id="cPlay">▶ Auto-play</button><button id="cReset">Reset</button></div>
+<div class="scroll"><div id="gantt"></div><div id="ticks"></div></div>
+<p class="note" id="cInfo"></p>
+</div>
+<div class="card">
+<h2>Metrics</h2>
+<div class="scroll"><table><thead><tr><th>PID</th><th>Arrival</th><th>Burst</th><th>Completion</th><th>Turnaround</th><th>Waiting</th></tr></thead><tbody id="mBody"></tbody></table></div>
+<div class="stat"><div>Average turnaround<br><b id="aT">–</b></div><div>Average waiting<br><b id="aW">–</b></div></div>
+</div>
+</section>
+</main>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const COL=["#3b6ef6","#12a36b","#e8883a","#a855f7","#d9433b","#0ea5b7","#c9a227","#e0589a"];
+
+/* ---------- tabs ---------- */
+$("tD").onclick=()=>tab(true);$("tC").onclick=()=>tab(false);
+function tab(d){$("disk").classList.toggle("hide",!d);$("cpu").classList.toggle("hide",d);
+ $("tD").classList.toggle("on",d);$("tC").classList.toggle("on",!d);}
+
+/* =================== DISK =================== */
+const DISK={
+ FCFS(h,r){return [{pos:h,served:false},...r.map(p=>({pos:p,served:true}))];},
+ SSTF(h,r){let left=[...r],cur=h,out=[{pos:h,served:false}];
+  while(left.length){let bi=0;
+   for(let i=1;i<left.length;i++) if(Math.abs(left[i]-cur)<Math.abs(left[bi]-cur)) bi=i;
+   cur=left.splice(bi,1)[0];out.push({pos:cur,served:true});}
+  return out;},
+ SCAN(h,r,d,N){const lo=r.filter(x=>x<h).sort((a,b)=>b-a),hi=r.filter(x=>x>=h).sort((a,b)=>a-b);
+  const out=[{pos:h,served:false}],s=a=>a.forEach(p=>out.push({pos:p,served:true}));
+  if(d==="up"){s(hi);if(lo.length){out.push({pos:N-1,served:false});s(lo);}}
+  else{s(lo);if(hi.length){out.push({pos:0,served:false});s(hi);}}
+  return out;},
+ "C-SCAN"(h,r,d,N){const lo=r.filter(x=>x<h).sort((a,b)=>a-b),hi=r.filter(x=>x>=h).sort((a,b)=>a-b);
+  const out=[{pos:h,served:false}],s=a=>a.forEach(p=>out.push({pos:p,served:true}));
+  if(d==="up"){s(hi);if(lo.length){out.push({pos:N-1,served:false},{pos:0,served:false});s(lo);}}
+  else{s([...lo].reverse());if(hi.length){out.push({pos:0,served:false},{pos:N-1,served:false});s([...hi].reverse());}}
+  return out;},
+ LOOK(h,r,d){const lo=r.filter(x=>x<h).sort((a,b)=>b-a),hi=r.filter(x=>x>=h).sort((a,b)=>a-b);
+  const out=[{pos:h,served:false}],s=a=>a.forEach(p=>out.push({pos:p,served:true}));
+  d==="up"?(s(hi),s(lo)):(s(lo),s(hi));return out;}
+};
+const total=p=>p.reduce((t,s,i)=>i?t+Math.abs(s.pos-p[i-1].pos):0,0);
+
+let D=null,dStepIdx=0,dTimer=null;
+
+function readDisk(){
+ const N=Number($("dSize").value),h=Number($("dHead").value);
+ const raw=$("dReq").value.split(/[\s,]+/).filter(Boolean),r=raw.map(Number);
+ if(!Number.isInteger(N)||N<2) return "Disk size must be a whole number of at least 2.";
+ if(!Number.isInteger(h)||h<0||h>=N) return `Head position must be a whole number from 0 to ${N-1}.`;
+ if(!r.length) return "Enter at least one request.";
+ if(r.length>60) return "Please use 60 requests or fewer.";
+ const bad=r.find(x=>!Number.isInteger(x)||x<0||x>=N);
+ if(bad!==undefined) return `Request "${bad}" is not a whole number between 0 and ${N-1}.`;
+ return {N,h,r,dir:$("dDir").value,alg:$("dAlg").value};
+}
+function runDisk(){
+ stopD();
+ const v=readDisk();
+ if(typeof v==="string"){$("dErr").textContent=v;return;}
+ $("dErr").textContent="";
+ v.path=DISK[v.alg](v.h,v.r,v.dir,v.N);D=v;dStepIdx=0;drawDisk();drawCmp();
+}
+function drawDisk(){
+ const svg=$("dSvg");if(!D){return;}
+ const W=900,H=360,L=30,R=870,T=34,B=340,n=D.path.length;
+ const X=c=>L+(R-L)*c/(D.N-1),Y=i=>T+(B-T)*i/Math.max(n-1,1);
+ let s=`<line x1="${L}" x2="${R}" y1="${T-14}" y2="${T-14}" stroke="var(--bd)"/>`;
+ const ticks=Math.min(10,D.N-1);
+ for(let k=0;k<=ticks;k++){const c=Math.round((D.N-1)*k/ticks);
+  s+=`<line x1="${X(c)}" x2="${X(c)}" y1="${T-18}" y2="${B}" stroke="var(--bd)" stroke-dasharray="2 4"/><text x="${X(c)}" y="${T-22}" text-anchor="middle">${c}</text>`;}
+ for(let i=1;i<=dStepIdx&&i<n;i++){
+  const a=D.path[i-1],b=D.path[i];
+  s+=`<line x1="${X(a.pos)}" y1="${Y(i-1)}" x2="${X(b.pos)}" y2="${Y(i)}" stroke="var(--ac)" stroke-width="2"/>`;}
+ for(let i=0;i<=dStepIdx&&i<n;i++){
+  const p=D.path[i],cur=i===dStepIdx;
+  s+=`<circle cx="${X(p.pos)}" cy="${Y(i)}" r="${cur?6:4}" fill="${i===0?"var(--ok)":p.served?"var(--ac)":"var(--bg)"}" stroke="${p.served||i===0?"var(--ac)":"var(--mu)"}" stroke-width="2"/>`;
+  s+=`<text x="${X(p.pos)+8}" y="${Y(i)+4}" style="${i===0?"font-weight:700;fill:var(--ok)":""}">${i===0?"HEAD = "+p.pos:p.pos}</text>`;}
+ s+=`<line x1="${X(D.h)}" x2="${X(D.h)}" y1="${T-14}" y2="${B}" stroke="var(--ok)" stroke-dasharray="5 4" opacity=".6"/>
+     <circle cx="${L+6}" cy="352" r="5" fill="var(--ok)"/>
+     <text x="${L+16}" y="356">Head start position = ${D.h}</text>`;
+ svg.innerHTML=s;
+ const t=total(D.path.slice(0,dStepIdx+1));
+ $("dTot").textContent=`${total(D.path)} cylinders`;
+ $("dStep").textContent=`${dStepIdx} / ${n-1}`;
+ $("dMove").textContent=dStepIdx?`${D.path[dStepIdx-1].pos} → ${D.path[dStepIdx].pos} (${Math.abs(D.path[dStepIdx].pos-D.path[dStepIdx-1].pos)}), running total ${t}`:"Start at "+D.h;
+ $("dSeq").innerHTML="Service sequence: "+(D.path.slice(1).filter(p=>p.served).length?
+   D.path.map((p,i)=>(i&&p.served)?`<span class="${i===dStepIdx?"cur":""}" style="${i>dStepIdx?"opacity:.35":""}">${p.pos}</span>`:"").filter(Boolean).join(" → "):"–");
+}
+function stopD(){clearInterval(dTimer);dTimer=null;$("dPlay").textContent="▶ Auto-play";}
+function dNext(){if(D&&dStepIdx<D.path.length-1){dStepIdx++;drawDisk();return true;}return false;}
+$("dRun").onclick=runDisk;
+$("dSample").onclick=()=>{$("dSize").value=200;$("dHead").value=50;$("dReq").value="82,170,43,140,24,16,190";runDisk();};
+$("dAlg").onchange=runDisk;$("dDir").onchange=runDisk;
+$("dNext").onclick=()=>{stopD();dNext();};
+$("dPrev").onclick=()=>{stopD();if(D&&dStepIdx>0){dStepIdx--;drawDisk();}};
+$("dReset").onclick=()=>{stopD();dStepIdx=0;drawDisk();};
+$("dPlay").onclick=()=>{
+ if(!D) return;
+ if(dTimer){stopD();return;}
+ if(dStepIdx>=D.path.length-1) dStepIdx=0;
+ $("dPlay").textContent="⏸ Pause";
+ dTimer=setInterval(()=>{if(!dNext())stopD();},1100-$("dSpd").value*100);
+};
+
+function drawCmp(){
+ if(!D) return;
+ const algs=Object.keys(DISK),vals=algs.map(a=>total(DISK[a](D.h,D.r,D.dir,D.N)));
+ const max=Math.max(...vals,1),best=Math.min(...vals);
+ let s="";const bw=90,gap=60,x0=70,base=220,ht=180;
+ s+=`<line x1="50" x2="880" y1="${base}" y2="${base}" stroke="var(--bd)"/>`;
+ algs.forEach((a,i)=>{const h=ht*vals[i]/max,x=x0+i*(bw+gap);
+  s+=`<rect x="${x}" y="${base-h}" width="${bw}" height="${h}" rx="4" fill="${vals[i]===best?"var(--ok)":"var(--ac)"}"/>
+  <text x="${x+bw/2}" y="${base-h-6}" text-anchor="middle" style="font-weight:600">${vals[i]}</text>
+  <text x="${x+bw/2}" y="${base+16}" text-anchor="middle">${a}${a===D.alg?" (selected)":""}</text>`;});
+ s+=`<text x="50" y="248" style="fill:var(--mu)">Total head movement in cylinders. Green = lowest. Direction: ${D.dir}, head at ${D.h}.</text>`;
+ $("dCmp").innerHTML=s;
+}
+
+/* =================== CPU =================== */
+const DEF=[[1,0,5,2],[2,1,3,1],[3,2,8,4],[4,3,6,3]];
+function addRow(v){
+ const tr=document.createElement("tr");
+ tr.innerHTML=`<td><input value="P${v[0]}"></td><td><input type="number" value="${v[1]}"></td><td><input type="number" value="${v[2]}"></td><td><input type="number" value="${v[3]}"></td><td><button>✕</button></td>`;
+ tr.querySelector("button").onclick=()=>tr.remove();
+ $("pBody").appendChild(tr);
+}
+DEF.forEach(addRow);
+$("pAdd").onclick=()=>addRow([$("pBody").children.length+1,0,1,1]);
+$("cAlg").onchange=()=>{$("qWrap").classList.toggle("hide",$("cAlg").value!=="RR");};
+
+function readProcs(){
+ const rows=[...$("pBody").children];
+ if(!rows.length) return "Add at least one process.";
+ const ps=[],seen=new Set();
+ for(const tr of rows){
+  const [a,b,c,d]=[...tr.querySelectorAll("input")].map(i=>i.value.trim());
+  if(!a) return "Every process needs an ID.";
+  if(seen.has(a)) return `Duplicate process ID "${a}".`;seen.add(a);
+  const at=Number(b),bt=Number(c),pr=Number(d);
+  if(!Number.isInteger(at)||at<0) return `${a}: arrival time must be a whole number >= 0.`;
+  if(!Number.isInteger(bt)||bt<1) return `${a}: burst time must be a whole number >= 1.`;
+  if(!Number.isInteger(pr)) return `${a}: priority must be a whole number.`;
+  ps.push({id:a,at,bt,pr,rem:bt});
+ }
+ return ps;
+}
+function simulate(ps,alg,q){
+ ps=ps.map(p=>({...p,rem:p.bt}));
+ const segs=[],done={};let t=0,left=ps.length;
+ const push=(id,s,e)=>{const l=segs[segs.length-1];if(l&&l.id===id&&l.e===s)l.e=e;else segs.push({id,s,e});};
+ const key=p=>alg==="FCFS"?[p.at]:alg==="PRI"?[p.pr,p.at]:[p.alg==="SRTF"?p.rem:p.bt,p.at];
+ const better=(a,b)=>{const x=key(a),y=key(b);for(let i=0;i<x.length;i++){if(x[i]!==y[i])return x[i]<y[i];}return a.at<b.at;};
+ if(alg==="RR"){
+  const order=[...ps].sort((a,b)=>a.at-b.at),Q=[];let ni=0;
+  const admit=()=>{while(ni<order.length&&order[ni].at<=t)Q.push(order[ni++]);};
+  while(left){
+   admit();
+   if(!Q.length){const nt=order[ni].at;push(null,t,nt);t=nt;continue;}
+   const p=Q.shift(),run=Math.min(q,p.rem);
+   push(p.id,t,t+run);t+=run;p.rem-=run;admit();
+   if(p.rem>0)Q.push(p);else{done[p.id]=t;left--;}
+  }
+  return {segs,done};
+ }
+ while(left){
+  const ready=ps.filter(p=>p.at<=t&&p.rem>0);
+  if(!ready.length){const nt=Math.min(...ps.filter(p=>p.rem>0).map(p=>p.at));push(null,t,nt);t=nt;continue;}
+  let pick=ready[0];
+  for(const p of ready){const pa={...p,alg},pb={...pick,alg};if(better(pa,pb))pick=p;}
+  if(alg==="SRTF"){
+   const nextArr=Math.min(...ps.filter(p=>p.at>t&&p.rem>0).map(p=>p.at),Infinity);
+   const run=Math.min(pick.rem,nextArr-t);
+   push(pick.id,t,t+run);t+=run;pick.rem-=run;
+  }else{push(pick.id,t,t+pick.rem);t+=pick.rem;pick.rem=0;}
+  if(pick.rem===0){done[pick.id]=t;left--;}
+ }
+ return {segs,done};
+}
+let C=null,cStep=0,cTimer=null;
+function runCpu(){
+ stopC();
+ const ps=readProcs(),q=Number($("cQ").value);
+ if(typeof ps==="string"){$("cErr").textContent=ps;return;}
+ if($("cAlg").value==="RR"&&(!Number.isInteger(q)||q<1)){$("cErr").textContent="Time quantum must be a whole number >= 1.";return;}
+ $("cErr").textContent="";
+ const alg=$("cAlg").value,res=simulate(ps,alg,q);
+ C={ps,...res,alg};cStep=0;
+ let sw=0,st=0;
+ $("mBody").innerHTML=ps.map(p=>{const ct=res.done[p.id],tat=ct-p.at,wt=tat-p.bt;sw+=wt;st+=tat;
+  return `<tr><td>${p.id}</td><td>${p.at}</td><td>${p.bt}</td><td>${ct}</td><td>${tat}</td><td>${wt}</td></tr>`;}).join("");
+ $("aT").textContent=(st/ps.length).toFixed(2);$("aW").textContent=(sw/ps.length).toFixed(2);
+ drawGantt();
+}
+function drawGantt(){
+ if(!C) return;
+ const U=Math.max(22,Math.min(46,820/Math.max(...C.segs.map(s=>s.e))));
+ const shown=C.segs.slice(0,cStep);
+ $("gantt").className="gantt";
+ $("gantt").innerHTML=shown.map(s=>{const ci=s.id===null?-1:C.ps.findIndex(p=>p.id===s.id);
+  return `<div style="width:${(s.e-s.s)*U}px;background:${ci<0?"var(--mu)":COL[ci%COL.length]}">${s.id===null?"idle":s.id}</div>`;}).join("");
+ let tk=shown.length?`<div style="width:0">${shown[0].s}</div>`:"";
+ tk+=shown.map(s=>`<div style="width:${(s.e-s.s)*U}px">${s.e}</div>`).join("");
+ $("ticks").className="ticks";$("ticks").innerHTML=tk;
+ const cur=shown[shown.length-1];
+ $("cInfo").textContent=cur?`Step ${cStep} of ${C.segs.length}: ${cur.id===null?"CPU idle":cur.id+" runs"} from t=${cur.s} to t=${cur.e}.`:`Press Next or Auto-play. ${C.segs.length} steps in total.`;
+}
+function stopC(){clearInterval(cTimer);cTimer=null;$("cPlay").textContent="▶ Auto-play";}
+function cNext(){if(C&&cStep<C.segs.length){cStep++;drawGantt();return true;}return false;}
+$("cRun").onclick=runCpu;
+$("cNext").onclick=()=>{stopC();cNext();};
+$("cPrev").onclick=()=>{stopC();if(C&&cStep>0){cStep--;drawGantt();}};
+$("cReset").onclick=()=>{stopC();cStep=0;drawGantt();};
+$("cPlay").onclick=()=>{
+ if(!C) return;
+ if(cTimer){stopC();return;}
+ if(cStep>=C.segs.length)cStep=0;
+ $("cPlay").textContent="⏸ Pause";
+ cTimer=setInterval(()=>{if(!cNext())stopC();},700);
+};
+
+runDisk();runCpu();
+</script>
+</body>
+</html>
